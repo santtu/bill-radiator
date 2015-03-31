@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+import boto.ec2.cloudwatch
+import datetime
+from flask import Flask, jsonify, render_template
+from flask.ext.cache import Cache
+
+def get_charges():
+    ## For billing metrics region is not relevant, but to read CloudWatch
+    ## metrics we have to connect to a specific region.
+    c = boto.ec2.cloudwatch.connect_to_region('us-east-1')
+    end = datetime.datetime.utcnow()
+    start = end - datetime.timedelta(days=1)
+
+    values = c.get_metric_statistics(
+        namespace='AWS/Billing',
+        metric_name='EstimatedCharges',
+        statistics=['Maximum'],
+        dimensions={"Currency":"USD"},
+        start_time=start,
+        end_time=end,
+        period=60)
+
+    charges = max([value['Maximum'] for value in values])
+
+    return charges
+
+app = Flask(__name__)
+app.config.from_envvar('BILL_RADIATOR_SETTINGS', silent=True)
+cache = Cache(app, config={'CACHE_TYPE': 'simple'})
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+## Use a long cache timeout to restrict the rate we query AWS. The
+## billing information does not change that rapidly.
+@app.route('/current-charges')
+@cache.cached(timeout=300) # 5 minutes
+def current_charges():
+    print("Fetching charges ...")
+    charges = get_charges()
+    print("... got", charges)
+    return jsonify(charges=charges)
+
+app.run()
